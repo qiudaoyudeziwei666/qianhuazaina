@@ -1,24 +1,39 @@
 # -*- coding: utf-8 -*-
-"""把「当前版本库内容」发布到 GitHub 公开仓库。
+"""「钱花在哪」GitHub 版本发布工具 —— 选择性发布 + 版本标签 + 回滚。
 
-为什么不是直接 git push：
-  1. 本地前几次提交里曾含设备序列号与本机路径，推整条历史等于把隐私留在云端；
-     这里只取「当前已跟踪文件」生成一个干净的初始提交。
-  2. 当前环境代理放行 api.github.com，但拦截 github.com 的 Git 协议（CONNECT 502），
-     所以走 GitHub REST / Git Data API 上传，不依赖 git push。
+核心约定（重要）：
+  * 本地可以随便改、随便 git commit，**不合格的改动不会自动上传**。
+  * 只有执行 --publish 才发布，且发布的是「某个已提交的 Git 版本」的内容，
+    不是工作区当前文件；未提交的改动天然不会混进去。
+  * 每次发布在云端追加一条提交（parent 指向上一版），并打一个递增版本标签 vN，
+    因此任何历史版本都能被找到和回滚。
+  * 本地前几次提交里曾含已清理的隐私内容，所以**不推本地整条历史**；
+    云端是一条从干净初始提交开始的独立版本链。
 
-准备：
-  在本文件同目录创建 `.github-token`（纯文本，只放 Personal Access Token），
-  或设置环境变量 GITHUB_TOKEN。Token 需要 repo 权限（ classic PAT 勾 repo，
-  fine-grained PAT 给目标仓库 Contents: read/write + Metadata: read）。
-  `.github-token` 已加入 .gitignore，不会被提交或上传。
+为什么不用 git push：
+  本机代理放行 api.github.com，但拦截 github.com 的 Git 协议（CONNECT 502）。
+  所以走 GitHub REST / Git Data API。
 
-用法：
-  python publish-github.py --dry-run       # 只导出快照 + 隐私复查，不联网
-  python publish-github.py --check         # 检查 token 与 API 连通性（不创建仓库）
-  python publish-github.py                 # 创建公开仓库并上传
-  python publish-github.py --name my-repo  # 自定义仓库名
-  python publish-github.py --reuse         # 仓库已存在时，覆盖其 main 分支内容
+凭据（按优先级）：
+  1. 环境变量 GITHUB_TOKEN
+  2. 同目录 .github-token（纯文本，已 gitignore）
+  3. 同目录 local_auth.py 的 token() —— 读取本机 GitHub Desktop 已登录凭据，
+     该文件只存在于本机、不提交、不上传。
+
+常用命令：
+  python publish-github.py                       # 只看状态（默认不改任何东西）
+  python publish-github.py --status              # 同上：云端版本 / 本地 HEAD / 差异
+  python publish-github.py --diff                # 列出本地 HEAD 与云端的差异文件
+  python publish-github.py --list                # 列出云端所有版本标签
+  python publish-github.py --dry-run             # 演练发布：导出+隐私复查，不联网写
+  python publish-github.py --publish             # 发布当前 HEAD 为新版本
+  python publish-github.py --publish --ref 1309bcd --note "修好预算图表"
+  python publish-github.py --publish --version v5
+  python publish-github.py --rollback v1         # 安全回滚：新提交，内容恢复到 v1
+  python publish-github.py --rollback v1 --hard  # 强制把 main 指回 v1（不新增提交）
+  python publish-github.py --rollback v1 --dry-run
+  python publish-github.py --baseline            # 给云端当前 main 打 v1 基线标签
+  python publish-github.py --check               # 校验 token 与 API
 """
 import base64
 import json
@@ -34,7 +49,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-SNAPSHOT = os.path.join(tempfile.gettempdir(), "qhn-release-snapshot")
+SNAPSHOT_ROOT = os.path.join(tempfile.gettempdir(), "qhn-release")
 API = "https://api.github.com"
 DEFAULT_NAME = "qianhuazaina"
 DESCRIPTION = "钱花在哪 · 本地优先的安卓自动记账应用（通知识别 / 智能分类 / 可视化分析 / 预算 / 储蓄）"
@@ -54,42 +69,44 @@ def out(*args):
     print(*args, flush=True)
 
 
-def tracked_files():
-    raw = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=BASE, capture_output=True
-    ).stdout
-    return [p.decode("utf-8") for p in raw.split(b"\0") if p]
+def arg_value(flag, default=None):
+    if flag in sys.argv:
+        i = sys.argv.index(flag)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
 
 
-def build_snapshot():
-    files = tracked_files()
-    if os.path.isdir(SNAPSHOT):
-        # 增量覆盖，不做批量删除（避免误删 / 触发安全策略）
-        pass
-    os.makedirs(SNAPSHOT, exist_ok=True)
-    for rel in files:
-        src = os.path.join(BASE, rel)
-        if not os.path.isfile(src):
+def git_bytes(*args):
+    r = subprocess.run(["git"] + list(args), cwd=BASE, capture_output=True)
+    if r.returncode != 0:
+        raise SystemExit("git %s 失败：%s" % (" ".join(args), r.stderr.decode("utf-8", "replace")[:200]))
+    return r.stdout
+
+
+def git_text(*args):
+    return git_bytes(*args).decode("utf-8", "replace").strip()
+
+
+def local_tree(ref):
+    """读取某个已提交 Git 版本的全部文件：path -> (mode, blob_sha, content)。"""
+    raw = git_bytes("ls-tree", "-r", "-z", ref)
+    entries = {}
+    for item in raw.split(b"\0"):
+        if not item:
             continue
-        dst = os.path.join(SNAPSHOT, rel.replace("/", os.sep))
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(src, "rb") as f:
-            data = f.read()
-        with open(dst, "wb") as f:
-            f.write(data)
-    return files
+        meta, path_bytes = item.split(b"\t", 1)
+        mode, _typ, sha = meta.split()
+        path = path_bytes.decode("utf-8", "replace")
+        content = git_bytes("show", "%s:%s" % (ref, path))
+        entries[path] = (mode.decode(), sha.decode(), content)
+    return entries
 
 
-def privacy_check(files):
+def privacy_check(entries):
     bad = []
-    for rel in files:
-        path = os.path.join(SNAPSHOT, rel.replace("/", os.sep))
-        if not os.path.isfile(path):
-            continue
-        try:
-            text = open(path, encoding="utf-8", errors="replace").read()
-        except Exception:
-            continue
+    for rel, (_mode, _sha, content) in entries.items():
+        text = content.decode("utf-8", "replace")
         for name, pattern in PRIVACY_PATTERNS.items():
             if re.search(pattern, text):
                 bad.append((rel, name))
@@ -102,8 +119,14 @@ def read_token():
         return token
     path = os.path.join(BASE, ".github-token")
     if os.path.isfile(path):
-        return open(path, encoding="utf-8", errors="replace").read().strip()
-    return ""
+        token = open(path, encoding="utf-8", errors="replace").read().strip()
+        if token:
+            return token
+    try:
+        from local_auth import token as desktop_token
+        return (desktop_token() or "").strip()
+    except Exception:
+        return ""
 
 
 def api(method, path, token, payload=None):
@@ -113,7 +136,7 @@ def api(method, path, token, payload=None):
     req.add_header("Authorization", "Bearer " + token)
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    req.add_header("User-Agent", "qhn-publisher/1.0")
+    req.add_header("User-Agent", "qhn-publisher/2.0")
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
@@ -131,147 +154,346 @@ def api(method, path, token, payload=None):
         return 0, {"error": "%s: %s" % (type(e).__name__, e)}
 
 
-def publish(token, repo_name, reuse):
+def repo_context(token, repo_name):
     status, user = api("GET", "/user", token)
     if status != 200:
         raise SystemExit("Token 校验失败（HTTP %s）：%s" % (status, str(user)[:300]))
     owner = user.get("login")
-    out("[1/5] 已认证账号：" + str(owner))
-
     repo_path = "/repos/%s/%s" % (owner, repo_name)
     status, info = api("GET", repo_path, token)
-    if status == 200:
-        if not reuse:
-            # 刚创建、还没有任何提交的空仓库允许继续；有内容的仓库则需显式 --reuse
-            s0, _ = api("GET", repo_path + "/git/ref/heads/" + (info.get("default_branch") or "main"), token)
-            if s0 == 200:
-                raise SystemExit("仓库 %s/%s 已存在且有内容。确认覆盖请加 --reuse，或换 --name。" % (owner, repo_name))
-            out("[2/5] 复用刚创建的空仓库：" + str(info.get("html_url")))
-        else:
-            out("[2/5] 复用已有仓库：" + str(info.get("html_url")))
-    elif status == 404:
-        payload = {
-            "name": repo_name,
-            "description": DESCRIPTION,
-            "private": False,
-            "auto_init": False,
-            "has_issues": True,
-            "has_wiki": False,
-        }
-        status, info = api("POST", "/user/repos", token, payload)
-        if status not in (201, 202):
-            raise SystemExit("创建仓库失败（HTTP %s）：%s" % (status, str(info)[:300]))
-        out("[2/5] 已创建公开仓库：" + str(info.get("html_url")))
-    else:
-        raise SystemExit("查询仓库失败（HTTP %s）：%s" % (status, str(info)[:300]))
+    if status != 200:
+        raise SystemExit("仓库不存在或不可访问（HTTP %s）：%s" % (status, str(info)[:200]))
+    return owner, repo_path, (info.get("default_branch") or "main")
 
-    default_branch = info.get("default_branch") or "main"
-    status, ref0 = api("GET", repo_path + "/git/ref/heads/" + default_branch, token)
-    repo_was_empty = status != 200
-    previous_sha = ref0.get("object", {}).get("sha") if isinstance(ref0, dict) else None
-    if repo_was_empty:
-        # 空仓库的 Git Data API 会返回 409 "Git Repository is empty"，
-        # 先用 Contents API 放一个占位文件，让仓库产生初始提交。
-        st, init = api("PUT", repo_path + "/contents/.gitkeep", token, {
-            "message": "chore: initialize repository",
-            "content": base64.b64encode(b"init\n").decode("ascii"),
+
+def main_ref(repo_path, token, branch):
+    status, ref = api("GET", repo_path + "/git/ref/heads/" + branch, token)
+    if status != 200 or not isinstance(ref, dict):
+        return None
+    return ref.get("object", {}).get("sha")
+
+
+def cloud_tree(repo_path, token, commit_sha):
+    status, commit = api("GET", repo_path + "/git/commits/" + commit_sha, token)
+    if status != 200:
+        return {}, None
+    tree_sha = commit.get("tree", {}).get("sha")
+    status, tree = api("GET", repo_path + "/git/trees/" + tree_sha + "?recursive=1", token)
+    if status != 200:
+        return {}, tree_sha
+    return {e["path"]: e["sha"] for e in tree.get("tree", []) if e.get("type") == "blob"}, tree_sha
+
+
+def list_tags(repo_path, token):
+    status, refs = api("GET", repo_path + "/git/refs/tags", token)
+    if status != 200 or not isinstance(refs, list):
+        return []
+    result = []
+    for r in refs:
+        name = r.get("ref", "").split("/")[-1]
+        sha = r.get("object", {}).get("sha", "")
+        status, c = api("GET", repo_path + "/git/commits/" + sha, token)
+        result.append({
+            "name": name,
+            "sha": sha,
+            "message": (c.get("message", "").splitlines() or [""])[0] if isinstance(c, dict) else "",
+            "date": c.get("committer", {}).get("date", "") if isinstance(c, dict) else "",
         })
-        if st not in (200, 201):
-            raise SystemExit("初始化空仓库失败（HTTP %s）：%s" % (st, str(init)[:250]))
-        out("      空仓库已初始化，继续上传")
-
-    files = [f for f in tracked_files() if os.path.isfile(os.path.join(SNAPSHOT, f.replace("/", os.sep)))]
-    out("[3/5] 上传 %d 个文件（blob）..." % len(files))
-    tree = []
-    for i, rel in enumerate(files, 1):
-        path = os.path.join(SNAPSHOT, rel.replace("/", os.sep))
-        with open(path, "rb") as f:
-            content = f.read()
-        status, blob = api("POST", repo_path + "/git/blobs", token, {
-            "content": base64.b64encode(content).decode("ascii"),
-            "encoding": "base64",
-        })
-        if status not in (201, 200) or "sha" not in blob:
-            raise SystemExit("上传文件失败 %s（HTTP %s）：%s" % (rel, status, str(blob)[:200]))
-        tree.append({
-            "path": rel,
-            "mode": "100755" if os.path.basename(rel) in EXECUTABLES else "100644",
-            "type": "blob",
-            "sha": blob["sha"],
-        })
-        if i % 20 == 0 or i == len(files):
-            out("      %d/%d" % (i, len(files)))
-
-    status, tree_obj = api("POST", repo_path + "/git/trees", token, {"tree": tree})
-    if status not in (201, 200) or "sha" not in tree_obj:
-        raise SystemExit("创建目录树失败（HTTP %s）：%s" % (status, str(tree_obj)[:300]))
-    out("[4/5] 目录树已创建")
-
-    commit_payload = {
-        "message": "feat: 钱花在哪 · 安卓自动记账应用（公开仓库初始提交）",
-        "tree": tree_obj["sha"],
-    }
-    # 复用有历史的仓库时保留 parent；空仓库则建立一条干净的 root commit
-    if not repo_was_empty and previous_sha:
-        commit_payload["parents"] = [previous_sha]
-    status, commit = api("POST", repo_path + "/git/commits", token, commit_payload)
-    if status not in (201, 200) or "sha" not in commit:
-        raise SystemExit("创建提交失败（HTTP %s）：%s" % (status, str(commit)[:300]))
-
-    # 强制把分支指向我们的提交：空仓库时占位提交会变成不可达对象，
-    # 最终公开仓库只显示这一条干净提交；已有仓库则是追加一次正常提交。
-    status, ref = api("PATCH", repo_path + "/git/refs/heads/" + default_branch,
-                      token, {"sha": commit["sha"], "force": True})
-    if status not in (201, 200):
-        status, ref = api("POST", repo_path + "/git/refs", token,
-                          {"ref": "refs/heads/" + default_branch, "sha": commit["sha"]})
-    if status not in (201, 200):
-        raise SystemExit("更新分支失败（HTTP %s）：%s" % (status, str(ref)[:300]))
-
-    api("PATCH", repo_path, token, {"default_branch": default_branch})
-    out("[5/5] 完成 ✅")
-    out("仓库地址：https://github.com/%s/%s" % (owner, repo_name))
-    out("提交：%s（%d 个文件%s）" % (
-        commit["sha"][:8], len(files),
-        "，单条干净初始提交" if repo_was_empty else "，已追加为最新提交"))
+    return sorted(result, key=lambda x: x["name"])
 
 
-def main():
-    args = sys.argv[1:]
-    dry = "--dry-run" in args
-    check = "--check" in args
-    reuse = "--reuse" in args
-    repo_name = DEFAULT_NAME
-    if "--name" in args:
-        idx = args.index("--name")
-        if idx + 1 < len(args):
-            repo_name = args[idx + 1]
+def next_version(tags, explicit=None):
+    if explicit:
+        return explicit if explicit.startswith("v") else "v" + explicit
+    nums = [int(m.group(1)) for t in tags if (m := re.match(r"^v(\d+)$", t["name"]))]
+    return "v%d" % (max(nums) + 1 if nums else 1)
 
-    files = build_snapshot()
-    out("快照目录：" + SNAPSHOT)
-    out("待发布文件：%d 个" % len(files))
-    bad = privacy_check(files)
+
+def create_tag(repo_path, token, name, sha):
+    status, res = api("POST", repo_path + "/git/refs", token,
+                      {"ref": "refs/tags/" + name, "sha": sha})
+    return status in (200, 201)
+
+
+def diff_summary(local, cloud):
+    added = sorted(p for p in local if p not in cloud)
+    removed = sorted(p for p in cloud if p not in local)
+    changed = sorted(p for p in local if p in cloud and local[p][1] != cloud[p])
+    return added, changed, removed
+
+
+# ---------------------------------------------------------------- 命令实现
+
+def cmd_status(token, repo_name, ref):
+    owner, repo_path, branch = repo_context(token, repo_name)
+    sha = main_ref(repo_path, token, branch)
+    tags = list_tags(repo_path, token)
+    out("=== 发布状态（只读） ===")
+    out("  云端仓库 : https://github.com/%s/%s" % (owner, repo_name))
+    out("  当前分支 : %s @ %s" % (branch, (sha or "?")[:10]))
+    out("  版本标签 : %s" % (", ".join(t["name"] for t in tags) if tags else "（尚无，建议先 --baseline）"))
+    head = git_text("rev-parse", "HEAD")
+    subject = git_text("log", "-1", "--format=%s")
+    dirty = len([l for l in git_text("status", "--porcelain").splitlines() if l])
+    out("  本地 HEAD: %s  %s" % (head[:10], subject[:60]))
+    out("  未提交改动: %d 个文件（这些不会被发布）" % dirty)
+    if sha:
+        cloud, _ = cloud_tree(repo_path, token, sha)
+        local = local_tree(ref)
+        added, changed, removed = diff_summary(local, cloud)
+        out("  与云端差异: 新增 %d / 修改 %d / 删除 %d" % (len(added), len(changed), len(removed)))
+        if added or changed or removed:
+            out("  提示：确认合格后再 --publish；不合格的改动留在本地即可。")
+    return tags
+
+
+def cmd_diff(token, repo_name, ref):
+    owner, repo_path, branch = repo_context(token, repo_name)
+    sha = main_ref(repo_path, token, branch)
+    cloud, _ = cloud_tree(repo_path, token, sha)
+    local = local_tree(ref)
+    added, changed, removed = diff_summary(local, cloud)
+    out("=== 本地 %s 与云端 main 的差异 ===" % ref)
+    out("  本地 %d 个文件 / 云端 %d 个文件" % (len(local), len(cloud)))
+    out("  新增 %d、修改 %d、删除 %d" % (len(added), len(changed), len(removed)))
+    for label, items in (("新增", added), ("修改", changed), ("删除", removed)):
+        for p in items[:20]:
+            out("    %s  %s" % (label, p))
+        if len(items) > 20:
+            out("    ... 另有 %d 个" % (len(items) - 20))
+
+
+def cmd_list(token, repo_name):
+    owner, repo_path, branch = repo_context(token, repo_name)
+    sha = main_ref(repo_path, token, branch)
+    tags = list_tags(repo_path, token)
+    out("=== 云端版本（仓库 %s/%s） ===" % (owner, repo_name))
+    if not tags:
+        out("  尚无版本标签。执行 --baseline 给当前内容打 v1。")
+    for t in tags:
+        mark = " ← 当前" if t["sha"] == sha else ""
+        out("  %-6s %s  %s  %s%s" % (t["name"], t["sha"][:8], t["date"][:19], t["message"][:52], mark))
+    out("  回滚：python publish-github.py --rollback vN")
+
+
+def cmd_baseline(token, repo_name, dry):
+    owner, repo_path, branch = repo_context(token, repo_name)
+    sha = main_ref(repo_path, token, branch)
+    if not sha:
+        raise SystemExit("云端还没有任何提交，无法打基线标签。")
+    tags = list_tags(repo_path, token)
+    if any(t["name"] == "v1" for t in tags):
+        out("v1 基线标签已存在，无需重复执行。")
+        return
+    if dry:
+        out("[dry-run] 将给 %s 打上 v1 基线标签" % sha[:8])
+        return
+    ok = create_tag(repo_path, token, "v1", sha)
+    out(("已打基线标签 v1 → %s" % sha[:8]) if ok else "打标签失败（可能权限不足）")
+
+
+def cmd_publish(token, repo_name, ref, note, version, dry):
+    owner, repo_path, branch = repo_context(token, repo_name)
+    resolved = git_text("rev-parse", ref)
+    subject = git_text("log", "-1", "--format=%s", ref)
+    entries = local_tree(ref)
+    out("=== 发布准备 ===")
+    out("  来源提交: %s  %s" % (resolved[:10], subject[:60]))
+    out("  文件数量: %d（只来自这一个 Git 提交，未提交改动不含在内）" % len(entries))
+    bad = privacy_check(entries)
     if bad:
         out("❌ 隐私复查未通过，已中止：")
         for rel, name in bad[:20]:
             out("   %s -> %s" % (rel, name))
         raise SystemExit(1)
-    out("隐私复查：通过（0 处命中：设备序列号 / 本机路径 / 密钥）")
+    out("  隐私复查: 通过（0 处命中）")
 
-    if dry:
-        out("[dry-run] 未联网、未创建仓库。快照已就绪。")
+    if "--export" in sys.argv:
+        dest = os.path.join(SNAPSHOT_ROOT, resolved[:10])
+        for rel, (_m, _s, content) in entries.items():
+            p = os.path.join(dest, rel.replace("/", os.sep))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(content)
+        out("  快照已导出: " + dest)
+
+    tags = list_tags(repo_path, token)
+    if not tags:
+        out("  云端尚无版本标签，稍后会自动补 v1 基线。")
+    current_sha = main_ref(repo_path, token, branch)
+    cloud, _ = cloud_tree(repo_path, token, current_sha) if current_sha else ({}, None)
+    added, changed, removed = diff_summary(entries, cloud)
+    out("  与云端差异: 新增 %d / 修改 %d / 删除 %d" % (len(added), len(changed), len(removed)))
+    if not (added or changed or removed):
+        out("  内容没有变化，无需发布新版本。")
         return
-    token = read_token()
-    if not token:
-        raise SystemExit(
-            "缺少 GitHub Token。请在本目录创建 .github-token（只放 token），"
-            "或设置环境变量 GITHUB_TOKEN 后重试。"
-        )
+
+    ver = next_version(tags, version)
+    # 云端尚无标签时，先给现有内容留 v1 基线，本次发布顺延为 v2
+    if not tags and current_sha and not version:
+        ver = "v2"
+    if dry:
+        out("  [dry-run] 将发布为 %s（commit 基于 %s，%d 个变化文件），不写入云端。" %
+            (ver, (current_sha or "root")[:8], len(added) + len(changed) + len(removed)))
+        if not tags and current_sha:
+            out("           同时会把现有内容标为 v1 基线。")
+        return
+
+    # 第一次给已有内容补基线标签，保证版本链从 v1 开始
+    if not tags and current_sha:
+        create_tag(repo_path, token, "v1", current_sha)
+        out("  已补基线标签 v1")
+
+    out("  上传变化文件（未变化文件直接复用云端 blob）...")
+    tree = []
+    uploaded = 0
+    for i, (rel, (mode, sha, content)) in enumerate(sorted(entries.items()), 1):
+        if cloud.get(rel) == sha:
+            blob_sha = sha
+        else:
+            status, blob = api("POST", repo_path + "/git/blobs", token, {
+                "content": base64.b64encode(content).decode("ascii"),
+                "encoding": "base64",
+            })
+            if status not in (200, 201) or "sha" not in blob:
+                raise SystemExit("上传文件失败 %s（HTTP %s）：%s" % (rel, status, str(blob)[:200]))
+            blob_sha = blob["sha"]
+            uploaded += 1
+        tree.append({
+            "path": rel,
+            "mode": "100755" if os.path.basename(rel) in EXECUTABLES else mode,
+            "type": "blob",
+            "sha": blob_sha,
+        })
+        if i % 30 == 0 or i == len(entries):
+            out("      %d/%d（新上传 %d）" % (i, len(entries), uploaded))
+
+    status, tree_obj = api("POST", repo_path + "/git/trees", token, {"tree": tree})
+    if status not in (200, 201) or "sha" not in tree_obj:
+        raise SystemExit("创建目录树失败（HTTP %s）：%s" % (status, str(tree_obj)[:250]))
+    message = "release %s | local %s | %s" % (ver, resolved[:10], note or subject[:60])
+    payload = {"message": message, "tree": tree_obj["sha"]}
+    if current_sha:
+        payload["parents"] = [current_sha]
+    status, commit = api("POST", repo_path + "/git/commits", token, payload)
+    if status not in (200, 201) or "sha" not in commit:
+        raise SystemExit("创建提交失败（HTTP %s）：%s" % (status, str(commit)[:250]))
+
+    if current_sha:
+        status, ref_res = api("PATCH", repo_path + "/git/refs/heads/" + branch,
+                              token, {"sha": commit["sha"], "force": False})
+    else:
+        status, ref_res = api("POST", repo_path + "/git/refs", token,
+                              {"ref": "refs/heads/" + branch, "sha": commit["sha"]})
+    if status not in (200, 201):
+        raise SystemExit("更新分支失败（HTTP %s）：%s" % (status, str(ref_res)[:250]))
+
+    create_tag(repo_path, token, ver, commit["sha"])
+    out("✅ 已发布 %s → %s" % (ver, commit["sha"][:8]))
+    out("   仓库：https://github.com/%s/%s" % (owner, repo_name))
+    out("   回滚：python publish-github.py --rollback %s" % ver)
+
+
+def cmd_rollback(token, repo_name, target, hard, dry, note):
+    owner, repo_path, branch = repo_context(token, repo_name)
+    sha = main_ref(repo_path, token, branch)
+    tags = list_tags(repo_path, token)
+    by_name = {t["name"]: t["sha"] for t in tags}
+    target_sha = by_name.get(target, target)
+    status, commit = api("GET", repo_path + "/git/commits/" + target_sha, token)
+    if status != 200 or not isinstance(commit, dict):
+        raise SystemExit("找不到目标版本 %s（用 --list 查看可用版本）" % target)
+    tree_sha = commit.get("tree", {}).get("sha")
+    out("=== 回滚 ===")
+    out("  目标版本: %s @ %s" % (target, target_sha[:8]))
+    out("  当前 main: %s" % sha[:8])
+    if hard:
+        out("  模式: 强制移动 main 指针（不新增提交，之后的提交不再出现在 main 历史里）")
+        if dry:
+            out("  [dry-run] 不写入云端。")
+            return
+        st, res = api("PATCH", repo_path + "/git/refs/heads/" + branch, token,
+                      {"sha": target_sha, "force": True})
+        if st not in (200, 201):
+            raise SystemExit("强制回滚失败（HTTP %s）：%s" % (st, str(res)[:250]))
+        out("✅ main 已指回 %s（%s）" % (target, target_sha[:8]))
+        return
+
+    ver = next_version(tags)
+    out("  模式: 安全回滚 —— 新建一条提交，内容恢复到 %s，历史线性不丢" % target)
+    if dry:
+        out("  [dry-run] 将创建 %s（内容=%s，parent=%s），不写入云端。" % (ver, target, sha[:8]))
+        return
+    payload = {
+        "message": "rollback %s -> %s | %s" % (ver, target, note or "内容恢复到历史版本"),
+        "tree": tree_sha,
+        "parents": [sha],
+    }
+    st, new_commit = api("POST", repo_path + "/git/commits", token, payload)
+    if st not in (200, 201) or "sha" not in new_commit:
+        raise SystemExit("创建回滚提交失败（HTTP %s）：%s" % (st, str(new_commit)[:250]))
+    st, res = api("PATCH", repo_path + "/git/refs/heads/" + branch, token,
+                  {"sha": new_commit["sha"], "force": False})
+    if st not in (200, 201):
+        raise SystemExit("更新分支失败（HTTP %s）：%s" % (st, str(res)[:250]))
+    create_tag(repo_path, token, ver, new_commit["sha"])
+    out("✅ 已回滚到 %s 的内容，新版本 %s @ %s" % (target, ver, new_commit["sha"][:8]))
+    out("   （之前的版本仍可通过 --list 找到，随时可再回滚回去）")
+
+
+def main():
+    argv = sys.argv[1:]
+    repo_name = arg_value("--name", DEFAULT_NAME)
+    ref = arg_value("--ref", "HEAD")
+    note = arg_value("--note", "")
+    version = arg_value("--version")
+    dry = "--dry-run" in argv
+    hard = "--hard" in argv
+    check = "--check" in argv
+
     if check:
+        token = read_token()
+        if not token:
+            raise SystemExit("缺少 GitHub 凭据（GITHUB_TOKEN / .github-token / local_auth.py）。")
         status, user = api("GET", "/user", token)
         out("Token 校验：HTTP %s，账号=%s" % (status, user.get("login", user.get("message", "?"))))
         return
-    publish(token, repo_name, reuse)
+
+    # 纯本地演练：不联网、不写云端
+    if "--dry-run" in argv and not any(a in argv for a in ("--publish", "--rollback", "--baseline")):
+        entries = local_tree(ref)
+        out("=== 本地演练（不联网） ===")
+        out("  来源提交: %s" % git_text("rev-parse", ref)[:10])
+        out("  文件数量: %d" % len(entries))
+        bad = privacy_check(entries)
+        if bad:
+            out("❌ 隐私复查未通过：")
+            for rel, name in bad[:20]:
+                out("   %s -> %s" % (rel, name))
+            raise SystemExit(1)
+        out("  隐私复查: 通过（0 处命中）")
+        out("  [dry-run] 未联网、未创建任何版本。合格后再执行 --publish。")
+        return
+
+    token = read_token()
+    if not token:
+        raise SystemExit("缺少 GitHub 凭据：设置 GITHUB_TOKEN、创建 .github-token，或放置 local_auth.py。")
+
+    if "--list" in argv:
+        cmd_list(token, repo_name)
+    elif "--diff" in argv:
+        cmd_diff(token, repo_name, ref)
+    elif "--baseline" in argv:
+        cmd_baseline(token, repo_name, dry)
+    elif "--rollback" in argv:
+        target = arg_value("--rollback")
+        if not target or target.startswith("--"):
+            raise SystemExit("请指定版本，例如 --rollback v1（可用 --list 查看）")
+        cmd_rollback(token, repo_name, target, hard, dry, note)
+    elif "--publish" in argv:
+        cmd_publish(token, repo_name, ref, note, version, dry)
+    else:
+        cmd_status(token, repo_name, ref)
 
 
 if __name__ == "__main__":
