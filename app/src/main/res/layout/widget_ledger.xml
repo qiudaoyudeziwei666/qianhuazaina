@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:orientation="vertical"
+    android:padding="18dp">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="知账 · 本月支出" android:textColor="#19231F" android:textSize="13sp" android:textStyle="bold" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="点击打开" android:textColor="#76817B" android:textSize="10sp" />
+    </LinearLayout>
+
+    <TextView android:id="@+id/widget_expense" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="¥ 0.00" android:textColor="#16745F" android:textSize="30sp" android:textStyle="bold" />
+    <TextView android:id="@+id/widget_budget" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="预算剩余 ¥ 0.00" android:textColor="#65716B" android:textSize="12sp" />
+</LinearLayout>

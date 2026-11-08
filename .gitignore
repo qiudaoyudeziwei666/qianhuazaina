@@ -1,0 +1,25 @@
+.gradle/
+.kotlin/
+.playwright-cli/
+__pycache__/
+*.pyc
+.idea/
+local.properties
+build/
+app/build/
+*.apk
+/*.png
+/*.jpg
+/*.xml
+*.db
+*.db-wal
+*.db-shm
+xm_*
+*.jsonl
+.captures/
+
+# 本机私有数据：不进入公开仓库
+.workbuddy/
+device-backup/
+xiaomi-ledger-snapshot.json
+.github-token

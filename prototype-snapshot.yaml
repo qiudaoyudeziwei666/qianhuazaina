@@ -1,0 +1,194 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e7]: 知账
+      - generic [ref=e8]: 交互原型
+    - generic [ref=e9]: 所有数据仅用于本地演示
+    - generic [ref=e11]:
+      - button "重置演示数据" [ref=e12] [cursor=pointer]
+      - button "模拟支付通知" [ref=e15] [cursor=pointer]
+  - generic [ref=e19]:
+    - complementary [ref=e20]:
+      - generic [ref=e21]: 我的账本
+      - button "今日概览" [ref=e22] [cursor=pointer]
+      - button "自动记账 2" [ref=e25] [cursor=pointer]:
+        - text: 自动记账
+        - generic [ref=e28]: "2"
+      - button "全部流水" [ref=e29] [cursor=pointer]
+      - button "智能分类" [ref=e32] [cursor=pointer]
+      - generic [ref=e35]: 工具与偏好
+      - button "桌面小组件" [ref=e36] [cursor=pointer]
+      - button "设置与权限" [ref=e39] [cursor=pointer]
+      - generic [ref=e42]:
+        - strong [ref=e45]: 隐私优先的自动记账
+        - paragraph [ref=e46]: 通知在本机解析，默认离线保存。只有你主动发起分类时，才会处理所选流水。
+    - main [ref=e47]:
+      - generic [ref=e48]:
+        - generic [ref=e49]:
+          - generic [ref=e50]:
+            - heading "下午好，林先生" [level=1] [ref=e51]
+            - paragraph [ref=e52]: 钱是生活的轨迹，知账替你轻轻记下。
+          - generic [ref=e53]: 11月4日 · 星期三
+        - generic [ref=e54]:
+          - generic [ref=e57]:
+            - strong [ref=e58]: 2 笔自动识别的支出待确认
+            - paragraph [ref=e59]: 核对后再入账，避免优惠、退款造成误记。
+          - button "去确认 →" [ref=e60] [cursor=pointer]
+        - generic [ref=e61]:
+          - generic [ref=e62]:
+            - generic [ref=e63]:
+              - generic [ref=e64]:
+                - generic [ref=e65]: 本月总支出
+                - generic [ref=e68]: 11 月
+              - generic [ref=e69]: ¥ 6,842.50
+            - generic [ref=e70]:
+              - generic [ref=e71]:
+                - generic [ref=e72]: 本月收入
+                - strong [ref=e73]: ¥ 12,800.00
+              - generic [ref=e74]:
+                - generic [ref=e75]: 今日支出
+                - strong [ref=e76]: ¥ 126.80
+              - generic [ref=e77]:
+                - generic [ref=e78]: 日均支出
+                - strong [ref=e79]: ¥ 220.73
+          - generic [ref=e80]:
+            - generic [ref=e81]:
+              - generic [ref=e82]:
+                - heading "月度预算" [level=2] [ref=e83]
+                - paragraph [ref=e84]: 距离月底还有 26 天
+              - button [ref=e85] [cursor=pointer]
+            - generic [ref=e88]:
+              - generic [ref=e90]:
+                - strong [ref=e91]: 61%
+                - generic [ref=e92]: 已使用
+              - generic [ref=e93]:
+                - strong [ref=e94]: 剩余 ¥4,357.50
+                - paragraph [ref=e95]: 总预算 ¥11,200.00进度正常，继续保持
+        - generic [ref=e96]:
+          - generic [ref=e97]:
+            - generic [ref=e98]:
+              - generic [ref=e99]:
+                - generic [ref=e100]:
+                  - heading "近 7 日支出" [level=2] [ref=e101]
+                  - paragraph [ref=e102]: 本周共支出 ¥1,264.30
+                - generic [ref=e103]: 较上周 ↓ 8.2%
+              - generic [ref=e104]:
+                - generic [ref=e105]:
+                  - generic [ref=e106]: ¥126
+                  - generic [ref=e109]: 周四
+                - generic [ref=e110]:
+                  - generic [ref=e111]: ¥238
+                  - generic [ref=e114]: 周五
+                - generic [ref=e115]:
+                  - generic [ref=e116]: ¥96
+                  - generic [ref=e119]: 周六
+                - generic [ref=e120]:
+                  - generic [ref=e121]: ¥342
+                  - generic [ref=e124]: 周日
+                - generic [ref=e125]:
+                  - generic [ref=e126]: ¥178
+                  - generic [ref=e129]: 周一
+                - generic [ref=e130]:
+                  - generic [ref=e131]: ¥157.5
+                  - generic [ref=e134]: 周二
+                - generic [ref=e135]:
+                  - generic [ref=e136]: ¥126.8
+                  - generic [ref=e139]: 周三
+            - generic [ref=e140]:
+              - generic [ref=e141]:
+                - heading "最近流水" [level=2] [ref=e142]
+                - button "查看全部 →" [ref=e143] [cursor=pointer]
+              - generic [ref=e144]:
+                - generic [ref=e145] [cursor=pointer]:
+                  - generic [ref=e146]: 支
+                  - generic [ref=e147]:
+                    - generic [ref=e148]: 瑞幸咖啡（软件园店）
+                    - generic [ref=e149]:
+                      - text: 今天 12:06
+                      - generic [ref=e150]: ·
+                      - generic [ref=e151]: 自动记录
+                  - generic [ref=e152]:
+                    - text: "-¥32.00"
+                    - generic [ref=e153]: 餐饮美食
+                - generic [ref=e154] [cursor=pointer]:
+                  - generic [ref=e155]: 微
+                  - generic [ref=e156]:
+                    - generic [ref=e157]: 深圳地铁
+                    - generic [ref=e158]:
+                      - text: 今天 09:18
+                      - generic [ref=e159]: ·
+                      - generic [ref=e160]: 自动记录
+                  - generic [ref=e161]:
+                    - text: "-¥6.00"
+                    - generic [ref=e162]: 交通出行
+                - generic [ref=e163] [cursor=pointer]:
+                  - generic [ref=e164]: 微
+                  - generic [ref=e165]:
+                    - generic [ref=e166]: 山姆会员商店
+                    - generic [ref=e167]:
+                      - text: 昨天 19:42
+                      - generic [ref=e168]: ·
+                      - generic [ref=e169]: 自动记录
+                  - generic [ref=e170]:
+                    - text: "-¥286.40"
+                    - generic [ref=e171]: 居家生活
+                - generic [ref=e172] [cursor=pointer]:
+                  - generic [ref=e173]: 京
+                  - generic [ref=e174]:
+                    - generic [ref=e175]: 京东 · 家用清洁剂
+                    - generic [ref=e176]:
+                      - text: 昨天 16:25
+                      - generic [ref=e177]: ·
+                      - generic [ref=e178]: 自动记录
+                  - generic [ref=e179]:
+                    - text: "-¥89.90"
+                    - generic [ref=e180]: 居家生活
+          - generic [ref=e181]:
+            - generic [ref=e182]:
+              - generic [ref=e188]:
+                - strong [ref=e189]: 自动记账运行中
+                - text: 刚刚完成一次通知检测
+              - generic [ref=e192]:
+                - generic [ref=e193]: 已连接的通知来源
+                - button "管理" [ref=e194] [cursor=pointer]
+              - generic [ref=e195]:
+                - generic [ref=e196]:
+                  - generic [ref=e197]: 微
+                  - text: 微信
+                - generic [ref=e198]:
+                  - generic [ref=e199]: 支
+                  - text: 支付宝
+                - generic [ref=e200]:
+                  - generic [ref=e201]: 淘
+                  - text: 淘宝
+              - button "演示自动记账" [ref=e202] [cursor=pointer]
+            - generic [ref=e205]:
+              - generic [ref=e206]:
+                - generic [ref=e207]:
+                  - heading "支出分类" [level=2] [ref=e208]
+                  - paragraph [ref=e209]: 本月消费构成
+                - button "详情" [ref=e210] [cursor=pointer]
+              - generic [ref=e211]:
+                - generic [ref=e212]: 餐饮美食
+                - generic [ref=e215]: ¥1,862
+              - generic [ref=e216]:
+                - generic [ref=e217]: 居家生活
+                - generic [ref=e220]: ¥1,395
+              - generic [ref=e221]:
+                - generic [ref=e222]: 购物消费
+                - generic [ref=e225]: ¥1,108
+              - generic [ref=e226]:
+                - generic [ref=e227]: 交通出行
+                - generic [ref=e230]: ¥726
+              - generic [ref=e231]:
+                - generic [ref=e232]: 其他
+                - generic [ref=e235]: ¥1,751
+  - option "餐饮美食" [selected]
+  - option "交通出行"
+  - option "购物消费"
+  - option "居家生活"
+  - option "其他"
+  - option "现金" [selected]
+  - option "微信支付"
+  - option "支付宝"
+  - option "银行卡"

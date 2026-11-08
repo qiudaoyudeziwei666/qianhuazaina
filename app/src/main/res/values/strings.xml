@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">知账</string>
+    <string name="widget_description">查看本月支出和剩余预算，点击打开知账。</string>
+</resources>
